@@ -1,3 +1,7 @@
+mod config;
+mod defs;
+mod utils;
+
 use std::{io::Write, path::Path};
 
 use anyhow::Result;
@@ -8,10 +12,6 @@ use crate::{
     defs::{LOWER_PATH, SYSTEM_PATH, UPPER_PATH, WORK_PATH},
     utils::{dir_copys, find_data_path, mount_overlyfs},
 };
-
-mod config;
-mod defs;
-mod utils;
 
 fn main() -> Result<()> {
     let mut builder = Builder::new();
