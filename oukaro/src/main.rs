@@ -13,7 +13,7 @@ use crate::{
     utils::{dir_copys, find_data_path, mount_overlyfs},
 };
 
-fn main() -> Result<()> {
+fn run() -> Result<()> {
     let mut builder = Builder::new();
     builder.format(|buf, record| {
         let local_time = chrono::Local::now();
@@ -59,4 +59,13 @@ fn main() -> Result<()> {
         }
         inotify.read_events_blocking(&mut [0; 1024])?;
     }
+}
+
+fn main() {
+    run().unwrap_or_else(|e| {
+        for c in e.chain() {
+            eprintln!("{c:#?}");
+        }
+        eprintln!("{:#?}", e.backtrace());
+    })
 }
