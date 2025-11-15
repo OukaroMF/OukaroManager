@@ -51,7 +51,7 @@ jobs:
           name: oukaromanager-module
           path: module/
           retention-days: 30
-  build-orkmng:
+  build-okrmng:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -78,12 +78,12 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$HOME/ndk"
           export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
-          cd orkmng
+          cd okrmng
           cargo ndk -t arm64-v8a build --release
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: oukaromanager-module
-          path: target/aarch64-linux-android/release/orkmng
+          name: okrmng
+          path: target/aarch64-linux-android/release/okrmng
           retention-days: 30
           
