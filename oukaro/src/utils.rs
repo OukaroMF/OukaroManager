@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use libc::{MS_NODEV, MS_NOEXEC, MS_NOSUID, MS_RDONLY};
 use regex::Regex;
 
-pub fn mount_overlyfs<P>(lower: P, upper: P, work: P, target: P) -> Result<()>
+pub fn mount_overlyfs<P>(lower: P, upper: P, work: P, target: &str) -> Result<()>
 where
     P: AsRef<Path>,
 {
