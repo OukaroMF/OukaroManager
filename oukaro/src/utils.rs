@@ -1,46 +1,34 @@
-use std::{ffi::CString, fs, os::unix::ffi::OsStrExt, path::Path, process::Command};
+use std::{
+    ffi::{CStr, CString},
+    fs,
+    os::unix::ffi::OsStrExt,
+    path::Path,
+    process::Command,
+};
 
 use anyhow::{Context, Result};
-use libc::{MS_NODEV, MS_NOEXEC, MS_NOSUID, MS_RDONLY};
 use regex::Regex;
+use rustix::mount::{MountFlags, mount};
 
 pub fn mount_overlyfs<P>(lower: P, upper: P, work: P, target: &str) -> Result<()>
 where
     P: AsRef<Path>,
 {
-    let (lower, upper, work, target) = (
-        lower.as_ref(),
-        upper.as_ref(),
-        work.as_ref(),
-        target.as_ref(),
-    );
+    let (lower, upper, work, target) = (lower.as_ref(), upper.as_ref(), work.as_ref(), target);
 
     fs::create_dir_all(upper).context("create upper")?;
     fs::create_dir_all(work).context("create work")?;
     fs::create_dir_all(target).context("create target")?;
 
-    let opt_bytes = format!(
+    let opts = format!(
         "lowerdir={lower},upperdir={upper},workdir={work}",
         lower = lower.display(),
         upper = upper.display(),
         work = work.display()
     );
-    let fstype = CString::new("overlay").unwrap();
-    let source = CString::new("overlay").unwrap();
-    let opts = CString::new(opt_bytes).unwrap();
+    let opts: Option<&CStr> = Some(&CString::new(opts).unwrap());
 
-    unsafe {
-        let ret = libc::mount(
-            source.as_ptr(),
-            target.as_os_str().as_bytes().as_ptr() as *const _,
-            fstype.as_ptr(),
-            (MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_RDONLY) as libc::c_ulong,
-            opts.as_ptr() as *const libc::c_void,
-        );
-        if ret != 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
-    }
+        mount("overlay", target, "overlay", MountFlags::empty(), opts)?;
     Ok(())
 }
 
