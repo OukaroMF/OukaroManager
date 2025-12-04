@@ -1,7 +1,6 @@
 use std::{
     ffi::{CStr, CString},
     fs,
-    os::unix::ffi::OsStrExt,
     path::Path,
     process::Command,
 };
@@ -28,7 +27,7 @@ where
     );
     let opts: Option<&CStr> = Some(&CString::new(opts).unwrap());
 
-        mount("overlay", target, "overlay", MountFlags::empty(), opts)?;
+    mount("overlay", target, "overlay", MountFlags::empty(), opts)?;
     Ok(())
 }
 
@@ -56,7 +55,7 @@ pub fn dir_copys(from: impl AsRef<Path>, to: impl AsRef<Path>) {
 /// get packge data path in =/data
 /// packge: packge name
 pub fn find_data_path(package: &str) -> Result<String> {
-    let out = Command::new("pm").args(&["path", package]).output()?;
+    let out = Command::new("pm").args(["path", package]).output()?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let re = Regex::new(r"^package:(.*)").unwrap();
     let caps = match re.captures(&stdout) {

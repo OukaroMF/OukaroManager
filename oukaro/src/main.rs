@@ -34,7 +34,7 @@ fn run() -> Result<()> {
     let mut inotify = Inotify::init()?;
     let system_path = Path::new("/system");
     let lower = Path::new(LOWER_PATH);
-    let upper = Path::new("UPPER_PATH");
+    let upper = Path::new(UPPER_PATH);
     let work = Path::new(WORK_PATH);
 
     inotify.watches().add(SYSTEM_PATH, WatchMask::MODIFY)?;
@@ -43,7 +43,7 @@ fn run() -> Result<()> {
         upper.join("priv-app"),
         work.join("priv-app"),
         "/system/priv-app",
-    );
+    )?;
     mount_overlyfs(
         lower.join("app"),
         upper.join("app"),
