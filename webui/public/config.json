@@ -1,0 +1,7 @@
+{
+  "extra": {
+    "pm": {
+      "allowUrlPackageFetch": true
+    }
+  }
+}

@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 0 0% 8%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 8%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 8%;
+    --primary: 0 0% 12%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 94%;
+    --secondary-foreground: 0 0% 14%;
+    --muted: 0 0% 94%;
+    --muted-foreground: 0 0% 40%;
+    --accent: 0 0% 92%;
+    --accent-foreground: 0 0% 14%;
+    --destructive: 0 0% 16%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 84%;
+    --input: 0 0% 84%;
+    --ring: 0 0% 12%;
+    --radius: 1.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-family: Manrope, 'Noto Sans SC', system-ui, sans-serif;
+  }
+
+  body {
+    @apply min-h-screen bg-background text-foreground antialiased;
+    background-color: hsl(var(--background));
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    margin: 0;
+    padding-top: var(--window-inset-top, 0px);
+    padding-right: var(--window-inset-right, 0px);
+    padding-bottom: var(--window-inset-bottom, 0px);
+    padding-left: var(--window-inset-left, 0px);
+  }
+
+  button,
+  input {
+    font: inherit;
+  }
+
+  #app {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+}
+
+@layer components {
+  .hero-shell {
+    background: hsl(var(--card));
+    box-shadow: 0 32px 80px -68px rgba(0, 0, 0, 0.35);
+    position: relative;
+  }
+}
