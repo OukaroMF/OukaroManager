@@ -38,12 +38,20 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y gcc-multilib
           cargo install --locked cargo-ndk
-      - name: Build
+      - name: Build module binaries
         run: |
           export ANDROID_NDK_HOME="$HOME/ndk"
           export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+          cd oukaro
           cargo ndk -t arm64-v8a build --release
-          cp target/aarch64-linux-android/release/oukaro ./module/
+          cp target/aarch64-linux-android/release/oukaro ../module/
+      - name: Build okrmng
+        run: |
+          export ANDROID_NDK_HOME="$HOME/ndk"
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+          cd okrmng
+          cargo ndk -t arm64-v8a build --release
+          cp target/aarch64-linux-android/release/okrmng ../module/
       - name: Build WebUI
         run: |
           cd webui
