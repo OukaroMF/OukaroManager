@@ -42,48 +42,11 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$HOME/ndk"
           export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
-          cd oukaro
           cargo ndk -t arm64-v8a build --release
-          cp target/aarch64-linux-android/release/oukaro ../module/
+          cp target/aarch64-linux-android/release/oukaro ./module/
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: oukaromanager-module
           path: module/
           retention-days: 30
-  build-okrmng:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Setup NDK
-        run: |
-          ndk_url=$(wget -qO- https://github.com/android/ndk/releases/latest \
-                      | grep -oP 'href="\Khttps://dl.google.com/android/repository/android-ndk-[^"]*-linux.zip' \
-                      | head -n1)
-          wget -O ndk.zip "$ndk_url" -nv
-          unzip -q ndk.zip -d "$HOME"
-          mv "$HOME/android-ndk-"* "$HOME/ndk"
-      - name: Setup Rust toolchains
-        run: |
-          rustup default nightly
-          rustup target add aarch64-linux-android
-          rustup component add rust-src
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y gcc-multilib
-          cargo install --locked cargo-ndk
-      - name: Build
-        run: |
-          export ANDROID_NDK_HOME="$HOME/ndk"
-          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
-          cd okrmng
-          cargo ndk -t arm64-v8a build --release
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: okrmng
-          path: okrmng/target/aarch64-linux-android/release/okrmng
-          retention-days: 30
-          
