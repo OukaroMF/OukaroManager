@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
+cesu8 = "1.1.0"
 clap = { version = "4.5.51", features = ["derive"] }
 quick-xml = "0.38.3"
 serde = { version = "1.0.228", features = ["derive"] }

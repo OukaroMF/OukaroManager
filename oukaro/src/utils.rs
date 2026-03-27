@@ -13,6 +13,9 @@ use rustix::mount::{MountFlags, mount};
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use std::ffi::{CStr, CString};
 
+use crate::android_install_path::normalize_user_app_code_path;
+use crate::android_package_state::SystemUserPackageState;
+use crate::android_xml::{parse_boolish, read_xmlish_text};
 use crate::defs::{PACKAGES_XML_PATHS, SYSTEM_USER_ID, SYSTEM_USER_PACKAGE_RESTRICTIONS_PATHS};
 
 #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -47,7 +50,8 @@ where
         upper = upper.display(),
         work = work.display()
     );
-    let opts: Option<&CStr> = Some(&CString::new(opts).unwrap());
+    let opts = CString::new(opts).context("encode overlay mount options")?;
+    let opts: Option<&CStr> = Some(opts.as_c_str());
 
     mount("overlay", target, "overlay", MountFlags::empty(), opts)?;
     Ok(())
@@ -175,6 +179,25 @@ fn copy_dir_contents(from: &Path, to: &Path) -> Result<()> {
 /// get packge data path in =/data
 /// packge: packge name
 pub fn find_data_path(package: &str) -> Result<Option<PathBuf>> {
+    let packages_xml_data_path = match find_data_path_from_packages_xml(package) {
+        Ok(Some(data_dir)) => {
+            log::info!(
+                "{} path is {} (from packages.xml metadata)",
+                package,
+                data_dir.display()
+            );
+            Some(data_dir)
+        }
+        Ok(None) => None,
+        Err(error) => {
+            log::warn!(
+                "failed to resolve package {} from packages.xml metadata: {error:#}",
+                package
+            );
+            None
+        }
+    };
+
     match is_installed_for_system_user(package) {
         Ok(true) => {}
         Ok(false) => {
@@ -186,6 +209,16 @@ pub fn find_data_path(package: &str) -> Result<Option<PathBuf>> {
             return Ok(None);
         }
         Err(error) => {
+            if let Some(data_path) = packages_xml_data_path {
+                log::warn!(
+                    "could not confirm package {} for system user {}: {error:#}; using packages.xml code path {} as best-effort fallback",
+                    package,
+                    SYSTEM_USER_ID,
+                    data_path.display()
+                );
+                return Ok(Some(data_path));
+            }
+
             log::warn!(
                 "could not confirm package {} for system user {}: {error:#}; skipping package for safety",
                 package,
@@ -195,46 +228,43 @@ pub fn find_data_path(package: &str) -> Result<Option<PathBuf>> {
         }
     }
 
-    match find_data_path_from_packages_xml(package) {
-        Ok(Some(data_dir)) => {
-            log::info!(
-                "{} path is {} (from packages.xml)",
-                package,
-                data_dir.display()
-            );
-            return Ok(Some(data_dir));
-        }
-        Ok(None) => {}
-        Err(error) => {
-            log::warn!(
-                "failed to resolve package {} from packages.xml metadata: {error:#}",
-                package
-            );
-        }
+    if let Some(data_dir) = packages_xml_data_path {
+        return Ok(Some(data_dir));
     }
 
     let out = Command::new("pm")
         .args(["path", "--user", SYSTEM_USER_ID, package])
         .output()
         .with_context(|| format!("execute `pm path --user {SYSTEM_USER_ID} {package}`"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
 
     if !out.status.success() {
+        if pm_path_failure_indicates_missing_package(&stdout, &stderr) {
+            log::info!(
+                "package {} is no longer visible to system user {}, skipping",
+                package,
+                SYSTEM_USER_ID
+            );
+            return Ok(None);
+        }
+
+        let detail = stderr.trim();
         log::warn!(
             "failed to resolve package {}: {}",
             package,
-            String::from_utf8_lossy(&out.stderr).trim()
+            if detail.is_empty() {
+                "no error output"
+            } else {
+                detail
+            }
         );
         return Ok(None);
     }
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let base_apk = match stdout
-        .lines()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix("package:"))
-    {
-        Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => return Ok(None),
+    let base_apk = match parse_pm_path_output(&stdout).into_iter().next() {
+        Some(path) => path,
+        None => return Ok(None),
     };
 
     let data_dir = base_apk
@@ -248,7 +278,11 @@ pub fn find_data_path(package: &str) -> Result<Option<PathBuf>> {
 
 fn is_installed_for_system_user(package: &str) -> Result<bool> {
     match read_system_user_package_states() {
-        Ok(Some(states)) => Ok(states.get(package).copied().unwrap_or(true)),
+        Ok(Some(states)) => Ok(states
+            .get(package)
+            .copied()
+            .unwrap_or_default()
+            .is_available()),
         Ok(None) => check_package_visible_to_system_user_with_pm(package),
         Err(restrictions_error) => match check_package_visible_to_system_user_with_pm(package) {
             Ok(installed) => {
@@ -271,22 +305,54 @@ fn check_package_visible_to_system_user_with_pm(package: &str) -> Result<bool> {
         .args(["path", "--user", SYSTEM_USER_ID, package])
         .output()
         .with_context(|| format!("execute `pm path --user {SYSTEM_USER_ID} {package}`"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
 
     if out.status.success() {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        return Ok(stdout
-            .lines()
-            .map(str::trim)
-            .any(|line| line.starts_with("package:")));
+        return Ok(!parse_pm_path_output(&stdout).is_empty());
     }
 
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let trimmed = stderr.trim();
-    if trimmed.contains("not found") || trimmed.contains("Unknown package") {
+    if pm_path_failure_indicates_missing_package(&stdout, &stderr) {
         return Ok(false);
     }
 
-    anyhow::bail!("`pm path --user {SYSTEM_USER_ID} {package}` failed: {trimmed}");
+    let trimmed = stderr.trim();
+    let detail = if trimmed.is_empty() {
+        "no error output"
+    } else {
+        trimmed
+    };
+
+    anyhow::bail!("`pm path --user {SYSTEM_USER_ID} {package}` failed: {detail}");
+}
+
+fn parse_pm_path_output(stdout: &str) -> Vec<PathBuf> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix("package:"))
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn pm_path_failure_indicates_missing_package(stdout: &str, stderr: &str) -> bool {
+    if !parse_pm_path_output(stdout).is_empty() {
+        return false;
+    }
+
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    lower.contains("unknown package")
+        || lower.contains("package not found")
+        || lower.contains("package was not found")
+        || lower.contains("unable to find package")
+        || lower.contains("not installed for")
 }
 
 fn find_data_path_from_packages_xml(package: &str) -> Result<Option<PathBuf>> {
@@ -314,7 +380,7 @@ fn find_data_path_from_packages_xml(package: &str) -> Result<Option<PathBuf>> {
 }
 
 fn find_data_path_from_packages_xml_file(path: &Path, package: &str) -> Result<Option<PathBuf>> {
-    let contents = fs::read_to_string(path)
+    let contents = read_xmlish_text(path)
         .with_context(|| format!("read package settings {}", path.display()))?;
     if let Some(code_path) = parse_package_code_path(&contents, package)? {
         if let Some(data_dir) = normalize_code_path(code_path) {
@@ -331,7 +397,7 @@ fn find_data_path_from_packages_xml_file(path: &Path, package: &str) -> Result<O
     Ok(None)
 }
 
-fn read_system_user_package_states() -> Result<Option<BTreeMap<String, bool>>> {
+fn read_system_user_package_states() -> Result<Option<BTreeMap<String, SystemUserPackageState>>> {
     let mut last_error = None;
 
     for restrictions_xml in SYSTEM_USER_PACKAGE_RESTRICTIONS_PATHS {
@@ -355,8 +421,10 @@ fn read_system_user_package_states() -> Result<Option<BTreeMap<String, bool>>> {
     }
 }
 
-fn read_package_states_from_restrictions_file(path: &Path) -> Result<BTreeMap<String, bool>> {
-    let contents = fs::read_to_string(path)
+fn read_package_states_from_restrictions_file(
+    path: &Path,
+) -> Result<BTreeMap<String, SystemUserPackageState>> {
+    let contents = read_xmlish_text(path)
         .with_context(|| format!("read package restrictions {}", path.display()))?;
     parse_package_restrictions_xml(&contents)
         .with_context(|| format!("parse package restrictions {}", path.display()))
@@ -395,7 +463,9 @@ fn parse_package_code_path(contents: &str, package: &str) -> Result<Option<PathB
     }
 }
 
-fn parse_package_restrictions_xml(contents: &str) -> Result<BTreeMap<String, bool>> {
+fn parse_package_restrictions_xml(
+    contents: &str,
+) -> Result<BTreeMap<String, SystemUserPackageState>> {
     let mut reader = Reader::from_str(contents);
     reader.config_mut().trim_text(true);
     let mut states = BTreeMap::new();
@@ -406,7 +476,7 @@ fn parse_package_restrictions_xml(contents: &str) -> Result<BTreeMap<String, boo
                 if event.name().as_ref() == b"pkg" || event.name().as_ref() == b"package" =>
             {
                 let mut package_name = None;
-                let mut installed = true;
+                let mut state = SystemUserPackageState::default();
 
                 for attribute in event.attributes().with_checks(false) {
                     let attribute = attribute?;
@@ -416,13 +486,18 @@ fn parse_package_restrictions_xml(contents: &str) -> Result<BTreeMap<String, boo
 
                     match attribute.key.as_ref() {
                         b"name" => package_name = Some(value),
-                        b"inst" | b"installed" => installed = !value.eq_ignore_ascii_case("false"),
+                        b"inst" | b"installed" => {
+                            state.installed = parse_boolish(&value).unwrap_or(state.installed)
+                        }
+                        b"hidden" | b"blocked" => {
+                            state.hidden = parse_boolish(&value).unwrap_or(state.hidden)
+                        }
                         _ => {}
                     }
                 }
 
                 if let Some(package_name) = package_name {
-                    states.insert(package_name, installed);
+                    states.insert(package_name, state);
                 }
             }
             Event::Eof => return Ok(states),
@@ -432,25 +507,7 @@ fn parse_package_restrictions_xml(contents: &str) -> Result<BTreeMap<String, boo
 }
 
 fn normalize_code_path(code_path: PathBuf) -> Option<PathBuf> {
-    if code_path.is_dir() {
-        return Some(code_path);
-    }
-
-    if code_path
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("apk"))
-    {
-        return code_path
-            .parent()
-            .filter(|parent| parent.exists())
-            .map(Path::to_path_buf);
-    }
-
-    if code_path.is_file() {
-        return code_path.parent().map(Path::to_path_buf);
-    }
-
-    None
+    normalize_user_app_code_path(&code_path)
 }
 
 fn remove_path(path: &Path) -> Result<()> {
@@ -503,14 +560,18 @@ mod tests {
     use std::{
         collections::{BTreeMap, HashSet},
         fs,
+        path::PathBuf,
     };
 
     use tempfile::tempdir;
 
     use super::{
         cleanup_unmanaged_packages, find_data_path_from_packages_xml_file,
-        parse_package_restrictions_xml, sync_package_dir,
+        parse_package_restrictions_xml, parse_pm_path_output,
+        pm_path_failure_indicates_missing_package, read_package_states_from_restrictions_file,
+        sync_package_dir,
     };
+    use crate::android_package_state::SystemUserPackageState;
 
     #[test]
     fn sync_package_dir_copies_contents_into_named_folder() {
@@ -603,6 +664,30 @@ mod tests {
     }
 
     #[test]
+    fn packages_xml_lookup_rejects_system_partition_code_paths_even_if_they_exist() {
+        let root = tempdir().unwrap();
+        let package_dir = root.path().join("system").join("app").join("System");
+        fs::create_dir_all(&package_dir).unwrap();
+        let base_apk = package_dir.join("System.apk");
+        fs::write(&base_apk, b"apk").unwrap();
+
+        let packages_xml = root.path().join("packages.xml");
+        fs::write(
+            &packages_xml,
+            format!(
+                r#"<packages><package name="com.example.system" codePath="{}" /></packages>"#,
+                base_apk.display()
+            ),
+        )
+        .unwrap();
+
+        let resolved =
+            find_data_path_from_packages_xml_file(&packages_xml, "com.example.system").unwrap();
+
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
     fn current_packages_xml_missing_package_is_not_treated_as_backup_hit() {
         let root = tempdir().unwrap();
         let current = root.path().join("packages.xml");
@@ -643,6 +728,60 @@ mod tests {
     }
 
     #[test]
+    fn packages_xml_lookup_supports_android_binary_xml() {
+        let root = tempdir().unwrap();
+        let package_dir = root
+            .path()
+            .join("data")
+            .join("app")
+            .join("com.example.binary");
+        fs::create_dir_all(&package_dir).unwrap();
+
+        let packages_xml = root.path().join("packages.xml");
+        let mut abx = Vec::new();
+        abx.extend_from_slice(b"ABX\0");
+        abx.push(0x00);
+
+        abx.push(0x02);
+        abx.extend_from_slice(&0xFFFF_u16.to_be_bytes());
+        abx.extend_from_slice(&(8_u16).to_be_bytes());
+        abx.extend_from_slice(b"packages");
+
+        abx.push(0x02);
+        abx.extend_from_slice(&0xFFFF_u16.to_be_bytes());
+        abx.extend_from_slice(&(7_u16).to_be_bytes());
+        abx.extend_from_slice(b"package");
+
+        abx.push(0x2F);
+        abx.extend_from_slice(&0xFFFF_u16.to_be_bytes());
+        abx.extend_from_slice(&(4_u16).to_be_bytes());
+        abx.extend_from_slice(b"name");
+        abx.extend_from_slice(&(18_u16).to_be_bytes());
+        abx.extend_from_slice(b"com.example.binary");
+
+        abx.push(0x2F);
+        abx.extend_from_slice(&0xFFFF_u16.to_be_bytes());
+        abx.extend_from_slice(&(8_u16).to_be_bytes());
+        abx.extend_from_slice(b"codePath");
+        let code_path = package_dir.display().to_string();
+        abx.extend_from_slice(&(code_path.len() as u16).to_be_bytes());
+        abx.extend_from_slice(code_path.as_bytes());
+
+        abx.push(0x03);
+        abx.extend_from_slice(&1_u16.to_be_bytes());
+        abx.push(0x03);
+        abx.extend_from_slice(&0_u16.to_be_bytes());
+        abx.push(0x01);
+
+        fs::write(&packages_xml, abx).unwrap();
+
+        let resolved =
+            find_data_path_from_packages_xml_file(&packages_xml, "com.example.binary").unwrap();
+
+        assert_eq!(resolved, Some(package_dir));
+    }
+
+    #[test]
     fn package_restrictions_parser_reads_installed_state_for_system_user() {
         let parsed = parse_package_restrictions_xml(
             r#"
@@ -659,11 +798,153 @@ mod tests {
         assert_eq!(
             parsed,
             BTreeMap::from([
-                ("com.example.alpha".to_string(), true),
-                ("com.example.beta".to_string(), false),
-                ("com.example.delta".to_string(), true),
-                ("com.example.gamma".to_string(), false),
+                (
+                    "com.example.alpha".to_string(),
+                    SystemUserPackageState {
+                        installed: true,
+                        hidden: false,
+                    }
+                ),
+                (
+                    "com.example.beta".to_string(),
+                    SystemUserPackageState {
+                        installed: false,
+                        hidden: false,
+                    }
+                ),
+                (
+                    "com.example.delta".to_string(),
+                    SystemUserPackageState {
+                        installed: true,
+                        hidden: false,
+                    }
+                ),
+                (
+                    "com.example.gamma".to_string(),
+                    SystemUserPackageState {
+                        installed: false,
+                        hidden: false,
+                    }
+                ),
             ])
         );
+    }
+
+    #[test]
+    fn package_restrictions_parser_reads_hidden_and_legacy_blocked_states() {
+        let parsed = parse_package_restrictions_xml(
+            r#"
+            <package-restrictions>
+              <pkg name="com.example.hidden" hidden="true" />
+              <pkg name="com.example.blocked" blocked="true" />
+            </package-restrictions>
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed,
+            BTreeMap::from([
+                (
+                    "com.example.blocked".to_string(),
+                    SystemUserPackageState {
+                        installed: true,
+                        hidden: true,
+                    }
+                ),
+                (
+                    "com.example.hidden".to_string(),
+                    SystemUserPackageState {
+                        installed: true,
+                        hidden: true,
+                    }
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn package_restrictions_reader_supports_android_binary_xml() {
+        let root = tempdir().unwrap();
+        let restrictions = root.path().join("package-restrictions.xml");
+
+        let mut abx = Vec::new();
+        abx.extend_from_slice(b"ABX\0");
+        abx.push(0x00);
+
+        abx.push(0x02);
+        abx.extend_from_slice(&0xFFFF_u16.to_be_bytes());
+        abx.extend_from_slice(&(20_u16).to_be_bytes());
+        abx.extend_from_slice(b"package-restrictions");
+
+        abx.push(0x02);
+        abx.extend_from_slice(&0xFFFF_u16.to_be_bytes());
+        abx.extend_from_slice(&(3_u16).to_be_bytes());
+        abx.extend_from_slice(b"pkg");
+
+        abx.push(0x2F);
+        abx.extend_from_slice(&0xFFFF_u16.to_be_bytes());
+        abx.extend_from_slice(&(4_u16).to_be_bytes());
+        abx.extend_from_slice(b"name");
+        abx.extend_from_slice(&(17_u16).to_be_bytes());
+        abx.extend_from_slice(b"com.example.alpha");
+
+        abx.push(0xDF);
+        abx.extend_from_slice(&0xFFFF_u16.to_be_bytes());
+        abx.extend_from_slice(&(4_u16).to_be_bytes());
+        abx.extend_from_slice(b"inst");
+
+        abx.push(0x03);
+        abx.extend_from_slice(&1_u16.to_be_bytes());
+        abx.push(0x03);
+        abx.extend_from_slice(&0_u16.to_be_bytes());
+        abx.push(0x01);
+
+        fs::write(&restrictions, abx).unwrap();
+
+        let states = read_package_states_from_restrictions_file(&restrictions).unwrap();
+
+        assert_eq!(
+            states,
+            BTreeMap::from([(
+                "com.example.alpha".to_string(),
+                SystemUserPackageState {
+                    installed: false,
+                    hidden: false,
+                }
+            )])
+        );
+    }
+
+    #[test]
+    fn pm_path_parser_extracts_base_and_split_paths() {
+        let paths = parse_pm_path_output(
+            "package:/data/app/~~abc/com.example/base.apk\npackage:/data/app/~~abc/com.example/split_config.arm64_v8a.apk\n",
+        );
+
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/data/app/~~abc/com.example/base.apk"),
+                PathBuf::from("/data/app/~~abc/com.example/split_config.arm64_v8a.apk"),
+            ]
+        );
+    }
+
+    #[test]
+    fn pm_path_missing_package_without_stderr_matches_aosp_shell_behavior() {
+        assert!(pm_path_failure_indicates_missing_package("", ""));
+        assert!(pm_path_failure_indicates_missing_package(
+            "",
+            "Error: Unknown package: com.example.missing"
+        ));
+    }
+
+    #[test]
+    fn pm_path_service_failures_are_not_treated_as_missing_package() {
+        assert!(!pm_path_failure_indicates_missing_package(
+            "",
+            "cmd: Can't find service: package"
+        ));
     }
 }

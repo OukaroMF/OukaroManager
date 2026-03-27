@@ -1,0 +1,164 @@
+feat: harden Android package handling and refine the KernelSU/WebUIX console
+
+Rework both the Rust backend and the Vue WebUI so the module behaves more
+predictably across modern Android package-manager states, early-boot timing
+windows, and mixed KernelSU/WebUIX hosts. The overall goal of this change is
+to remove optimistic assumptions from package discovery and WebUI runtime
+integration, then replace them with explicit fallbacks, stronger validation,
+and clearer user-facing diagnostics.
+
+Improve Android metadata decoding and shared parsing utilities.
+- Add shared helpers under `shared/` so both `okrmng` and `oukaro` consume the
+  same Android-specific parsing rules instead of drifting independently.
+- Introduce `shared/android_xml.rs` to decode plain UTF-8 XML, UTF-8 with BOM,
+  UTF-16 XML with or without BOM, Android binary XML (`ABX\0`), and
+  modified-UTF / CESU-8 payloads commonly emitted by Android framework code.
+- Align binary XML decoding more closely with AOSP behavior by handling
+  entity references, CDATA sections, base64-encoded byte payloads, string
+  interning, and ART-style multi-byte modified-UTF sequences.
+- Add `shared/android_package.rs` to validate package names against Android
+  application ID rules before they can enter persisted config or boot-time
+  apply paths.
+- Add `shared/android_package_state.rs` to model Android user availability as
+  `installed && !hidden`, matching the semantics used by package user state in
+  Android rather than treating install state alone as sufficient.
+- Add `shared/android_install_path.rs` so fallback package classification and
+  metadata-derived code path resolution share one strict understanding of
+  legitimate user-app install roots.
+
+Make `okrmng inspect` substantially more resilient and more informative.
+- Keep the existing `config.toml` format and CLI surface area intact, but
+  extend inspect output with `installedUserAppsSource`,
+  `systemUserStateSource`, and `warnings` so callers can tell whether data
+  came from `pm list packages`, `packages.xml + package-restrictions.xml`, or
+  a best-effort metadata fallback.
+- Fall back from `pm list packages -3 --user 0` to package metadata instead of
+  failing outright when the package service is unavailable, incomplete, or too
+  early in boot to answer shell queries reliably.
+- Parse both `publicFlags` and legacy `flags` fields when inferring whether a
+  package should be treated as a user app.
+- Mirror Android's package visibility semantics by treating
+  `hidden="true"` and legacy `blocked="true"` restriction entries as
+  unavailable for user 0 instead of only checking `installed`.
+- Tighten path-based user-app inference so fallback classification accepts
+  only known Android user-app roots such as `/data/app`,
+  legacy `/data/app-private`, and adopted-storage
+  `/mnt/expand/<uuid>/app`.
+- Keep malformed configured package names visible in inspect output, but emit
+  explicit warnings so callers understand that those entries will be ignored
+  at apply time.
+- Validate package names for `system-app add`, `priv-app add`, and
+  `replace --system/--priv` so invalid identifiers are rejected before they
+  reach disk.
+
+Strengthen `okrmng` config persistence semantics.
+- Continue writing config atomically, but explicitly sync the temporary file
+  before rename and sync the containing directory after persistence so writes
+  more closely match Android `AtomicFile` durability expectations.
+- Preserve sorted output through `BTreeSet`-backed config storage so generated
+  TOML remains deterministic and friendlier to review.
+
+Make `oukaro` more defensive during boot-time apply.
+- Reuse the shared Android XML decoder for `packages.xml` and
+  `package-restrictions.xml`, which prevents failures on devices that store
+  these files as UTF-16 or Android binary XML instead of plain UTF-8 text.
+- Resolve package code paths from `packages.xml` before relying on shell
+  probes so the module can still operate in early boot phases where the
+  package service is not yet ready.
+- Treat `pm path --user 0` failures with empty stderr as "package missing"
+  when they match AOSP shell behavior, instead of escalating them into hard
+  errors that would hide otherwise-usable metadata fallbacks.
+- Reuse the same `installed && !hidden` availability model that backs
+  `okrmng inspect`, keeping boot-time apply behavior aligned with the WebUI's
+  view of what user-0 can actually access.
+- Refuse metadata-derived code paths outside known Android user-app install
+  roots, even if those paths exist on disk, so stale or malformed metadata
+  cannot redirect mounts toward arbitrary filesystem locations.
+- Sanitize runtime config entries before applying them: skip malformed package
+  names, log why they were ignored, and resolve duplicate membership
+  deterministically in favor of `priv-app`.
+- Make `oukaro` honor `OUKARO_MANAGER_CONFIG_PATH` just like `okrmng`, which
+  improves testability and keeps both binaries consistent in recovery and
+  debugging workflows.
+
+Harden `oukaro` config creation and filesystem operations.
+- Replace the previous direct write path for first-run config creation with an
+  atomic temp-file write plus sync, matching the stronger persistence model
+  already used on the management side.
+- Keep overlay mount setup defensive by removing the production `unwrap()`
+  around mount option construction and reporting a real error if encoding
+  fails.
+- Preserve staging-directory cleanup in package sync flows so interrupted copy
+  operations do not leave partially prepared trees behind.
+
+Upgrade the WebUI runtime layer for real-world host variability.
+- Expand `module-api.ts` so the frontend can tolerate callback-based,
+  promise-based, and direct-return exec bridge implementations instead of
+  assuming one KernelSU host contract.
+- Normalize `window.ksu` and `window.kernelsu` so the app can operate across
+  bridge naming differences without special-case code in the view layer.
+- Add runtime detection for preview, KernelSU Manager, and WebUIX hosts.
+- Probe WebUIX-specific bridges such as `wx:module` and `wx:pm` when they are
+  available, rather than limiting the UI to official KernelSU helpers only.
+- Fall back to `/.package/<name>/...` info and icon resources on compatible
+  WebUIX hosts via the shipped `webui/public/config.json` capability flag.
+- Expose richer runtime capability information to the page so unsupported or
+  partially supported environments can surface warnings instead of failing
+  silently.
+
+Refine the WebUI experience and make state handling more robust.
+- Keep the page single-screen and mobile-first, but add clearer environment
+  badges, warning alerts, reboot-required guidance, and more precise
+  host/runtime status messaging.
+- Replace leftover generic template copy with Oukaro-specific wording such as
+  "System app configuration console" / "系统应用配置控制台" so the interface
+  reads like a real module console rather than a scaffold.
+- Persist the selected locale in local storage and restore it automatically on
+  the next load.
+- Persist unsaved drafts and the active search term, restore them when the
+  server-side base assignment set still matches, and notify the user with
+  toasts when a draft was successfully recovered.
+- Limit the default visible package list and matching search results to 10
+  items at a time, then provide explicit expand/collapse controls instead of
+  eagerly rendering the entire package set inside a mobile WebView.
+- Lazy-load package details only for the currently visible rows so large app
+  lists do not immediately trigger full metadata fetches.
+- Preserve package-name-only operation when richer package metadata is not
+  available, but show app labels, versions, icons, and fallback initials when
+  the host can supply them.
+- Keep local draft state intact when save fails, allowing the user to inspect
+  the error and retry without rebuilding their selections.
+
+Polish branding and mobile WebView integration.
+- Embed the Karo SVG as the favicon and in-page branding element so the WebUI
+  no longer looks like a stock Vite starter.
+- Update the document title to `OukaroManager` and load
+  `/internal/insets.css` with `viewport-fit=cover` so supported hosts can
+  honor safe-area insets correctly.
+- Add `100dvh` and inset-aware page padding in CSS to improve layout stability
+  on modern Android WebViews and edge-to-edge hosts.
+
+Keep documentation aligned with the implemented runtime behavior.
+- Update `README.md` to explicitly mention that the built WebUI now ships
+  `webroot/config.json` in order to enable `/.package/...` package info and
+  icon fetching on compatible WebUIX hosts.
+- Preserve the documented model that WebUI saves only update `config.toml`,
+  while actual mounts are still applied during the next boot's post-mount
+  phase.
+
+Expand regression coverage across both Rust binaries.
+- Add tests for Android binary XML decoding, UTF-16 XML decoding, modified-UTF
+  handling, package-state availability semantics, package-name validation, and
+  stricter install-root recognition.
+- Add tests for restriction parsing with `installed`, `hidden`, and legacy
+  `blocked` states.
+- Add tests that verify current package metadata is preferred over stale backup
+  files, invalid current XML still fails loudly, system-partition code paths
+  are rejected during metadata fallback, and package-path parsing handles
+  split APK output correctly.
+- Add coverage for atomic config creation on the `oukaro` side so default
+  config materialization is exercised directly.
+
+Validation:
+- `cargo test` in `okrmng`
+- `cargo test` in `oukaro`

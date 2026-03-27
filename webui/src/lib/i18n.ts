@@ -1,5 +1,7 @@
 import { createI18n } from 'vue-i18n'
 
+const LOCALE_STORAGE_KEY = 'oukaro.webui.locale'
+
 const messages = {
   en: {
     title: 'System App Workbench',
@@ -14,6 +16,12 @@ const messages = {
       eyebrow: 'System app configuration console',
       supported: 'KernelSU linked',
       preview: 'Preview only',
+      runtime: 'Runtime',
+      runtimePreview: 'Preview browser',
+      runtimeKernelSu: 'KernelSU Manager',
+      runtimeWebUiX: 'WebUIX',
+      capabilityFull: 'Exec and module metadata available',
+      capabilityLimited: 'Bridge is limited in this environment',
       reboot: 'Reboot required after save',
       managedBy: 'Backed by okrmng inspect/replace',
       modulePath: 'Module path',
@@ -27,6 +35,8 @@ const messages = {
       saving: 'Saving configuration...',
       reset: 'Reset draft',
       refresh: 'Reload state',
+      showMore: 'Show all',
+      showLess: 'Show less',
     },
     list: {
       title: 'Installed primary-user apps',
@@ -35,9 +45,13 @@ const messages = {
       searchLabel: 'Search packages',
       searchPlaceholder: 'com.example.app',
       modeLabel: 'Target mode',
+      detailsLoading: 'Loading package details',
+      detailsReady: 'Package details ready',
+      limitedCount: 'Showing {shown} of {total} matches',
       empty: 'No installed primary-user apps matched the current search.',
       noData: 'okrmng did not return any primary-user apps.',
       packageCount: '{count} apps available',
+      sourceLabel: 'Discovery source: {source}',
     },
     summary: {
       title: 'Current draft',
@@ -65,8 +79,16 @@ const messages = {
       unsupportedTitle: 'KernelSU APIs are unavailable',
       unsupportedBody:
         'This page can render in a normal browser for layout work, but refresh and save stay disabled until it runs inside KernelSU Manager or WebUIX.',
+      limitedBridgeTitle: 'Bridge support is partial',
+      limitedBridgeBody:
+        'This runtime exposed only part of the KernelSU bridge. Loading or saving may stay unavailable until both exec and moduleInfo are present.',
       loadFailedTitle: 'Could not load module state',
       saveFailedTitle: 'Could not save configuration',
+      inspectFallbackTitle: 'Android package discovery is in fallback mode',
+      inspectFallbackBody:
+        'Installed app discovery is using {source}. {details}',
+      inspectFallbackDefault:
+        'The package list was reconstructed from Android package settings metadata instead of `pm list packages`.',
       missingTitle: 'Stale configuration preserved',
       missingBody:
         '{count} configured packages are no longer listed for the primary Android user. Saving keeps those stale entries unchanged.',
@@ -82,6 +104,7 @@ const messages = {
       saveFailed: 'Could not save configuration.',
       refreshed: 'Module state refreshed.',
       loadFailed: 'Could not load module state.',
+      draftRestored: 'Restored an unsaved draft from the last session.',
     },
     status: {
       loading: 'Loading module state...',
@@ -93,6 +116,11 @@ const messages = {
       changed: 'Changed',
       preserved: 'Preserved',
       selected: 'Selected',
+    },
+    sources: {
+      pmListPackages: 'pm list packages',
+      packagesXmlAndRestrictions: 'packages.xml + package-restrictions.xml',
+      packagesXmlBestEffort: 'packages.xml best effort',
     },
   },
   'zh-CN': {
@@ -108,6 +136,12 @@ const messages = {
       eyebrow: '系统应用配置控制台',
       supported: '已连接 KernelSU',
       preview: '仅预览模式',
+      runtime: '运行环境',
+      runtimePreview: '预览浏览器',
+      runtimeKernelSu: 'KernelSU Manager',
+      runtimeWebUiX: 'WebUIX',
+      capabilityFull: '已具备 exec 与 moduleInfo 能力',
+      capabilityLimited: '当前环境桥接能力不完整',
       reboot: '保存后需要重启',
       managedBy: '由 okrmng inspect/replace 驱动',
       modulePath: '模块路径',
@@ -121,6 +155,8 @@ const messages = {
       saving: '正在保存配置...',
       reset: '重置草稿',
       refresh: '重新读取状态',
+      showMore: '展开全部',
+      showLess: '收起列表',
     },
     list: {
       title: '主用户已安装应用',
@@ -128,9 +164,13 @@ const messages = {
       searchLabel: '搜索包名',
       searchPlaceholder: 'com.example.app',
       modeLabel: '目标模式',
+      detailsLoading: '正在读取应用详情',
+      detailsReady: '应用详情已就绪',
+      limitedCount: '当前显示 {shown} / {total} 条匹配结果',
       empty: '当前搜索条件下没有匹配到主用户应用。',
       noData: 'okrmng 没有返回任何主用户应用。',
       packageCount: '共 {count} 个应用',
+      sourceLabel: '发现来源：{source}',
     },
     summary: {
       title: '当前草稿',
@@ -157,8 +197,16 @@ const messages = {
       unsupportedTitle: '当前环境没有 KernelSU API',
       unsupportedBody:
         '这个页面可以在普通浏览器里预览布局，但刷新和保存功能只有在 KernelSU Manager 或 WebUIX 里运行时才可用。',
+      limitedBridgeTitle: '桥接能力不完整',
+      limitedBridgeBody:
+        '当前运行环境只暴露了部分 KernelSU 桥接接口。只有当 exec 和 moduleInfo 都可用时，读取和保存才能稳定工作。',
       loadFailedTitle: '读取模块状态失败',
       saveFailedTitle: '保存配置失败',
+      inspectFallbackTitle: 'Android 包发现当前处于回退模式',
+      inspectFallbackBody:
+        '当前已安装应用列表使用 {source} 得出。{details}',
+      inspectFallbackDefault:
+        '当前列表并非来自 `pm list packages`，而是由 Android 包设置元数据重建得到。',
       missingTitle: '已保留失效配置',
       missingBody:
         '有 {count} 个已配置包名不再属于主用户（user 0）应用列表。保存时会保留这些失效条目，不会自动丢失。',
@@ -174,6 +222,7 @@ const messages = {
       saveFailed: '保存配置失败。',
       refreshed: '模块状态已刷新。',
       loadFailed: '读取模块状态失败。',
+      draftRestored: '已恢复上次未保存的草稿。',
     },
     status: {
       loading: '正在读取模块状态...',
@@ -186,14 +235,38 @@ const messages = {
       preserved: '已保留',
       selected: '已选择',
     },
+    sources: {
+      pmListPackages: 'pm list packages',
+      packagesXmlAndRestrictions: 'packages.xml + package-restrictions.xml',
+      packagesXmlBestEffort: 'packages.xml 尽力推断',
+    },
   },
 } as const
 
-const locale = navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
+function detectInitialLocale() {
+  try {
+    const savedLocale = window.localStorage.getItem(LOCALE_STORAGE_KEY)
+    if (savedLocale === 'zh-CN' || savedLocale === 'en') {
+      return savedLocale
+    }
+  } catch {
+    // Ignore storage access failures and fall back to navigator.language.
+  }
+
+  return navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
+}
 
 export const i18n = createI18n({
   legacy: false,
-  locale,
+  locale: detectInitialLocale(),
   fallbackLocale: 'en',
   messages,
 })
+
+export function persistLocale(nextLocale: string) {
+  try {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, nextLocale)
+  } catch {
+    // Ignore storage failures in restricted WebView environments.
+  }
+}

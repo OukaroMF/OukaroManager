@@ -42,6 +42,10 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     margin: 0;
+    padding-top: var(--window-inset-top, 0px);
+    padding-right: var(--window-inset-right, 0px);
+    padding-bottom: var(--window-inset-bottom, 0px);
+    padding-left: var(--window-inset-left, 0px);
   }
 
   button,
@@ -51,6 +55,7 @@
 
   #app {
     min-height: 100vh;
+    min-height: 100dvh;
   }
 }
 

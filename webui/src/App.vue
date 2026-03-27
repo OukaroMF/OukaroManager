@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   Boxes,
   Languages,
@@ -25,7 +25,12 @@ import { RadioGroup, type RadioOption } from '@/components/ui/radio-group'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Toaster } from '@/components/ui/toaster'
+import { persistLocale } from '@/lib/i18n'
 import {
+  formatBridgeError,
+  getPackageIconUrl,
+  getPackagesInfo,
+  getRuntimeCapabilities,
   getModuleMetadata,
   inspectConfig,
   isKernelSuAvailable,
@@ -33,9 +38,25 @@ import {
   requestEdgeToEdge,
   showNativeToast,
 } from '@/lib/module-api'
-import type { AppMode, InspectPayload, ModuleMetadata } from '@/lib/types'
+import type {
+  AppMode,
+  InspectPayload,
+  InspectUserAppsSource,
+  ModuleMetadata,
+  PackageInfoSummary,
+  RuntimeCapabilities,
+} from '@/lib/types'
 
 type AssignmentMap = Record<string, AppMode>
+interface PersistedDraft {
+  moduleKey: string
+  baseAssignments: AssignmentMap
+  draftAssignments: AssignmentMap
+  search: string
+}
+
+const DRAFT_STORAGE_PREFIX = 'oukaro.webui.draft'
+const DEFAULT_VISIBLE_PACKAGE_COUNT = 10
 
 const modePriority: Record<AppMode, number> = {
   priv: 0,
@@ -45,17 +66,23 @@ const modePriority: Record<AppMode, number> = {
 
 const { locale, t } = useI18n()
 
+const runtimeCapabilities = ref<RuntimeCapabilities>(getRuntimeCapabilities())
 const kernelSupported = ref(isKernelSuAvailable())
 const moduleMetadata = ref<ModuleMetadata | null>(null)
 const inspectState = ref<InspectPayload | null>(null)
 const loading = ref(true)
 const refreshing = ref(false)
 const saving = ref(false)
+const packageDetailsLoading = ref(false)
 const errorMessage = ref<string | null>(null)
 const search = ref('')
+const packageListExpanded = ref(false)
 const originalAssignments = ref<AssignmentMap>({})
 const draftAssignments = ref<AssignmentMap>({})
 const lastSavedAt = ref<string | null>(null)
+const packageDetails = ref<Record<string, PackageInfoSummary>>({})
+const brokenIconUrls = ref<Record<string, true>>({})
+let packageDetailsRequestId = 0
 
 function buildAssignments(payload: InspectPayload): AssignmentMap {
   const nextAssignments: AssignmentMap = {}
@@ -71,11 +98,7 @@ function buildAssignments(payload: InspectPayload): AssignmentMap {
 }
 
 function errorToMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message
-  }
-
-  return String(error)
+  return formatBridgeError(error)
 }
 
 function formatTime(date: Date) {
@@ -99,6 +122,176 @@ function modeBadgeVariant(mode: AppMode) {
   }
 
   return 'secondary'
+}
+
+function runtimeLabel(runtime: RuntimeCapabilities['runtime']) {
+  if (runtime === 'webuix') {
+    return t('header.runtimeWebUiX')
+  }
+
+  if (runtime === 'kernelsu') {
+    return t('header.runtimeKernelSu')
+  }
+
+  return t('header.runtimePreview')
+}
+
+function inspectSourceLabel(source: InspectUserAppsSource | undefined) {
+  if (!source) {
+    return null
+  }
+
+  return t(`sources.${source}`)
+}
+
+function assignmentsEqual(left: AssignmentMap, right: AssignmentMap) {
+  const packageNames = new Set([...Object.keys(left), ...Object.keys(right)])
+
+  for (const packageName of packageNames) {
+    if ((left[packageName] ?? 'none') !== (right[packageName] ?? 'none')) {
+      return false
+    }
+  }
+
+  return true
+}
+
+function getModuleStorageKey() {
+  return moduleMetadata.value?.id || moduleMetadata.value?.moduleDir || runtimeCapabilities.value.runtime
+}
+
+function getDraftStorageKey() {
+  return `${DRAFT_STORAGE_PREFIX}:${getModuleStorageKey()}`
+}
+
+function readPersistedDraft() {
+  try {
+    const raw = window.localStorage.getItem(getDraftStorageKey())
+    if (!raw) {
+      return null
+    }
+
+    return JSON.parse(raw) as PersistedDraft
+  } catch {
+    return null
+  }
+}
+
+function clearPersistedDraft() {
+  try {
+    window.localStorage.removeItem(getDraftStorageKey())
+  } catch {
+    // Ignore storage failures in restricted WebView environments.
+  }
+}
+
+function persistDraftState() {
+  if (!moduleMetadata.value) {
+    return
+  }
+
+  if (!dirty.value) {
+    clearPersistedDraft()
+    return
+  }
+
+  const draft: PersistedDraft = {
+    moduleKey: getModuleStorageKey(),
+    baseAssignments: { ...originalAssignments.value },
+    draftAssignments: { ...draftAssignments.value },
+    search: search.value,
+  }
+
+  try {
+    window.localStorage.setItem(getDraftStorageKey(), JSON.stringify(draft))
+  } catch {
+    // Ignore storage failures in restricted WebView environments.
+  }
+}
+
+function restorePersistedDraft() {
+  const persisted = readPersistedDraft()
+  if (!persisted) {
+    return false
+  }
+
+  if (persisted.moduleKey !== getModuleStorageKey()) {
+    clearPersistedDraft()
+    return false
+  }
+
+  if (!assignmentsEqual(persisted.baseAssignments, originalAssignments.value)) {
+    clearPersistedDraft()
+    return false
+  }
+
+  draftAssignments.value = { ...persisted.draftAssignments }
+  search.value = persisted.search
+  return true
+}
+
+function resetPackageDetails() {
+  packageDetailsRequestId += 1
+  packageDetails.value = {}
+  packageDetailsLoading.value = false
+}
+
+function resetBrokenIcons() {
+  brokenIconUrls.value = {}
+}
+
+function markIconBroken(iconUrl: string | null | undefined) {
+  if (!iconUrl) {
+    return
+  }
+
+  brokenIconUrls.value = {
+    ...brokenIconUrls.value,
+    [iconUrl]: true,
+  }
+}
+
+async function loadPackageDetails(packageNames: string[]) {
+  const requestId = ++packageDetailsRequestId
+
+  if (!runtimeCapabilities.value.hasPackageInfo) {
+    packageDetails.value = {}
+    packageDetailsLoading.value = false
+    return
+  }
+
+  const missingPackages = [...new Set(packageNames)].filter(
+    (packageName) => !packageDetails.value[packageName],
+  )
+
+  if (missingPackages.length === 0) {
+    packageDetailsLoading.value = false
+    return
+  }
+
+  packageDetailsLoading.value = true
+
+  try {
+    const details = await getPackagesInfo(missingPackages)
+    if (requestId !== packageDetailsRequestId) {
+      return
+    }
+
+    if (!details) {
+      return
+    }
+
+    packageDetails.value = {
+      ...packageDetails.value,
+      ...Object.fromEntries(details.map((detail) => [detail.packageName, detail])),
+    }
+  } catch {
+    // Keep already loaded package details when an incremental fetch fails.
+  } finally {
+    if (requestId === packageDetailsRequestId) {
+      packageDetailsLoading.value = false
+    }
+  }
 }
 
 const modeOptions = computed<RadioOption<AppMode>[]>(() => [
@@ -137,22 +330,27 @@ const stats = computed(() => {
 })
 
 const dirty = computed(() => {
-  const packageNames = new Set([
-    ...Object.keys(originalAssignments.value),
-    ...Object.keys(draftAssignments.value),
-  ])
-
-  for (const packageName of packageNames) {
-    if (
-      (originalAssignments.value[packageName] ?? 'none') !==
-      (draftAssignments.value[packageName] ?? 'none')
-    ) {
-      return true
-    }
-  }
-
-  return false
+  return !assignmentsEqual(originalAssignments.value, draftAssignments.value)
 })
+
+const runtimeName = computed(() => runtimeLabel(runtimeCapabilities.value.runtime))
+const runtimeCapabilityLabel = computed(() =>
+  kernelSupported.value ? t('header.capabilityFull') : t('header.capabilityLimited'),
+)
+const hasLimitedBridge = computed(
+  () => runtimeCapabilities.value.hasBridge && !kernelSupported.value,
+)
+const inspectWarnings = computed(() => inspectState.value?.warnings ?? [])
+const inspectSourceName = computed(() =>
+  inspectSourceLabel(inspectState.value?.installedUserAppsSource),
+)
+const hasInspectFallback = computed(() => {
+  const source = inspectState.value?.installedUserAppsSource
+  return source === 'packagesXmlAndRestrictions' || source === 'packagesXmlBestEffort'
+})
+const inspectFallbackDetails = computed(() =>
+  inspectWarnings.value.join(' ') || t('alerts.inspectFallbackDefault'),
+)
 
 const visiblePackages = computed(() => {
   const payload = inspectState.value
@@ -167,9 +365,18 @@ const visiblePackages = computed(() => {
     .map((packageName) => {
       const currentMode = draftAssignments.value[packageName] ?? 'none'
       const originalMode = originalAssignments.value[packageName] ?? 'none'
+      const detail = packageDetails.value[packageName]
+      const appLabel = detail?.appLabel?.trim() || null
+      const versionLabel =
+        detail?.versionName?.trim() ||
+        (typeof detail?.versionCode === 'number' ? `vc ${detail.versionCode}` : null)
+      const iconUrl = detail?.iconUrl || getPackageIconUrl(packageName)
 
       return {
         packageName,
+        appLabel,
+        versionLabel,
+        iconUrl: iconUrl && !brokenIconUrls.value[iconUrl] ? iconUrl : null,
         currentMode,
         originalMode,
         changed: currentMode !== originalMode,
@@ -186,6 +393,20 @@ const visiblePackages = computed(() => {
       return left.packageName.localeCompare(right.packageName)
     })
 })
+
+const displayedPackages = computed(() =>
+  packageListExpanded.value
+    ? visiblePackages.value
+    : visiblePackages.value.slice(0, DEFAULT_VISIBLE_PACKAGE_COUNT),
+)
+
+const displayedPackageNamesKey = computed(() =>
+  displayedPackages.value.map((item) => item.packageName).join('\u0000'),
+)
+
+const hasHiddenPackages = computed(
+  () => visiblePackages.value.length > DEFAULT_VISIBLE_PACKAGE_COUNT,
+)
 
 const missingConfiguredSystem = computed(() => {
   const payload = inspectState.value
@@ -217,6 +438,9 @@ const canSave = computed(
 )
 
 async function loadState(kind: 'initial' | 'refresh' = 'initial') {
+  runtimeCapabilities.value = getRuntimeCapabilities()
+  kernelSupported.value = isKernelSuAvailable()
+
   if (kind === 'initial') {
     loading.value = true
   } else {
@@ -227,8 +451,11 @@ async function loadState(kind: 'initial' | 'refresh' = 'initial') {
 
   try {
     if (!kernelSupported.value) {
+      resetPackageDetails()
+      resetBrokenIcons()
       inspectState.value = null
       moduleMetadata.value = null
+      packageListExpanded.value = false
       originalAssignments.value = {}
       draftAssignments.value = {}
       return
@@ -239,10 +466,19 @@ async function loadState(kind: 'initial' | 'refresh' = 'initial') {
 
     const payload = await inspectConfig()
     inspectState.value = payload
+    packageListExpanded.value = false
+    resetPackageDetails()
+    resetBrokenIcons()
 
     const nextAssignments = buildAssignments(payload)
     originalAssignments.value = nextAssignments
     draftAssignments.value = { ...nextAssignments }
+
+    if (restorePersistedDraft()) {
+      const message = t('toasts.draftRestored')
+      toast.success(message)
+      showNativeToast(message)
+    }
 
     if (kind === 'refresh') {
       const message = t('toasts.refreshed')
@@ -273,6 +509,11 @@ function updatePackageMode(packageName: string, nextMode: AppMode) {
 function resetDraft() {
   draftAssignments.value = { ...originalAssignments.value }
   errorMessage.value = null
+  clearPersistedDraft()
+}
+
+function togglePackageListExpanded() {
+  packageListExpanded.value = !packageListExpanded.value
 }
 
 function packagesByMode(mode: AppMode) {
@@ -316,6 +557,7 @@ async function saveChanges() {
     const message = t('toasts.saved')
     toast.success(message)
     showNativeToast(message)
+    clearPersistedDraft()
   } catch (error) {
     errorMessage.value = errorToMessage(error)
 
@@ -327,7 +569,28 @@ async function saveChanges() {
   }
 }
 
+watch(locale, (nextLocale) => {
+  persistLocale(String(nextLocale))
+})
+
+watch([draftAssignments, search], () => {
+  persistDraftState()
+}, { deep: true })
+
+watch(search, () => {
+  packageListExpanded.value = false
+})
+
+watch(displayedPackageNamesKey, (joinedPackageNames) => {
+  if (!joinedPackageNames || !kernelSupported.value) {
+    return
+  }
+
+  void loadPackageDetails(displayedPackages.value.map((item) => item.packageName))
+})
+
 onMounted(() => {
+  requestEdgeToEdge()
   void loadState()
 })
 </script>
@@ -358,8 +621,9 @@ onMounted(() => {
             </p>
             <div class="mt-5 flex flex-wrap gap-2">
               <Badge :variant="kernelSupported ? 'default' : 'secondary'">
-                {{ kernelSupported ? t('header.supported') : t('header.preview') }}
+                {{ runtimeName }}
               </Badge>
+              <Badge variant="outline">{{ runtimeCapabilityLabel }}</Badge>
               <Badge variant="outline">{{ t('header.reboot') }}</Badge>
               <Badge variant="outline">{{ t('header.managedBy') }}</Badge>
             </div>
@@ -369,15 +633,18 @@ onMounted(() => {
             <div class="flex items-center justify-between gap-4">
               <div>
                 <p class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                  {{ t('language.label') }}
+                  {{ t('header.runtime') }}
                 </p>
                 <p class="mt-2 text-sm text-foreground/75">
-                  {{ kernelSupported ? t('header.supported') : t('header.preview') }}
+                  {{ runtimeName }}
                 </p>
               </div>
               <Languages class="h-5 w-5 text-primary" />
             </div>
             <div class="mt-4 flex flex-wrap gap-2">
+              <p class="w-full text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                {{ t('language.label') }}
+              </p>
               <Button
                 v-for="option in localeOptions"
                 :key="option.value"
@@ -405,12 +672,39 @@ onMounted(() => {
         </Alert>
 
         <Alert
+          v-else-if="hasLimitedBridge"
+          :description="t('alerts.limitedBridgeBody')"
+          :title="t('alerts.limitedBridgeTitle')"
+          variant="warning"
+        >
+          <template #icon>
+            <ShieldAlert class="h-5 w-5" />
+          </template>
+        </Alert>
+
+        <Alert
           v-if="errorMessage"
           :description="errorMessage"
           :title="
             saving ? t('alerts.saveFailedTitle') : t('alerts.loadFailedTitle')
           "
           variant="destructive"
+        >
+          <template #icon>
+            <TriangleAlert class="h-5 w-5" />
+          </template>
+        </Alert>
+
+        <Alert
+          v-if="hasInspectFallback"
+          :description="
+            t('alerts.inspectFallbackBody', {
+              source: inspectSourceName,
+              details: inspectFallbackDetails,
+            })
+          "
+          :title="t('alerts.inspectFallbackTitle')"
+          variant="warning"
         >
           <template #icon>
             <TriangleAlert class="h-5 w-5" />
@@ -488,8 +782,29 @@ onMounted(() => {
             <Badge variant="outline">
               {{ t('list.packageCount', { count: stats.installed }) }}
             </Badge>
+            <Badge v-if="inspectSourceName" variant="outline">
+              {{ t('list.sourceLabel', { source: inspectSourceName }) }}
+            </Badge>
             <Badge :variant="dirty ? 'default' : 'outline'">
               {{ dirty ? t('summary.dirty') : t('summary.synced') }}
+            </Badge>
+            <Badge v-if="hasHiddenPackages" variant="outline">
+              {{
+                t('list.limitedCount', {
+                  shown: displayedPackages.length,
+                  total: visiblePackages.length,
+                })
+              }}
+            </Badge>
+            <Badge
+              v-if="runtimeCapabilities.hasPackageInfo"
+              :variant="packageDetailsLoading ? 'outline' : 'secondary'"
+            >
+              {{
+                packageDetailsLoading
+                  ? t('list.detailsLoading')
+                  : t('list.detailsReady')
+              }}
             </Badge>
           </div>
 
@@ -513,7 +828,7 @@ onMounted(() => {
           <ScrollArea v-else class="flex-1 pr-1">
             <div class="grid gap-4">
               <Card
-                v-for="item in visiblePackages"
+                v-for="item in displayedPackages"
                 :key="item.packageName"
                 class="bg-background/78 p-0"
               >
@@ -527,10 +842,40 @@ onMounted(() => {
                         <Badge v-if="item.changed" variant="outline">
                           {{ t('labels.changed') }}
                         </Badge>
+                        <Badge v-if="item.versionLabel" variant="secondary">
+                          {{ item.versionLabel }}
+                        </Badge>
                       </div>
-                      <p class="break-all font-mono text-sm font-semibold text-foreground">
-                        {{ item.packageName }}
-                      </p>
+                      <div class="flex items-start gap-3">
+                        <div class="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[18px] border border-border/70 bg-card">
+                          <img
+                            v-if="item.iconUrl"
+                            :src="item.iconUrl"
+                            :alt="item.appLabel || item.packageName"
+                            class="h-9 w-9 object-contain"
+                            loading="lazy"
+                            @error="markIconBroken(item.iconUrl)"
+                          />
+                          <span
+                            v-else
+                            class="text-lg font-black uppercase tracking-[0.08em] text-muted-foreground"
+                          >
+                            {{ (item.appLabel || item.packageName).slice(0, 1) }}
+                          </span>
+                        </div>
+
+                        <div class="min-w-0">
+                          <p
+                            class="truncate text-sm font-semibold text-foreground"
+                            :title="item.appLabel || item.packageName"
+                          >
+                            {{ item.appLabel || item.packageName }}
+                          </p>
+                          <p class="mt-1 break-all font-mono text-xs text-muted-foreground">
+                            {{ item.packageName }}
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -541,6 +886,12 @@ onMounted(() => {
                   />
                 </div>
               </Card>
+            </div>
+
+            <div v-if="hasHiddenPackages" class="mt-4 flex justify-center">
+              <Button variant="outline" @click="togglePackageListExpanded">
+                {{ packageListExpanded ? t('actions.showLess') : t('actions.showMore') }}
+              </Button>
             </div>
           </ScrollArea>
         </Card>
@@ -657,6 +1008,14 @@ onMounted(() => {
             </div>
 
             <div class="space-y-4">
+              <div class="rounded-[24px] border border-border/70 bg-background/70 p-4">
+                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                  {{ t('header.runtime') }}
+                </p>
+                <p class="mt-2 font-mono text-sm text-foreground">
+                  {{ runtimeName }}
+                </p>
+              </div>
               <div class="rounded-[24px] border border-border/70 bg-background/70 p-4">
                 <p class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
                   {{ t('header.moduleId') }}

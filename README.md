@@ -74,6 +74,7 @@ okrmng replace --system "bin.mt.plus" --priv "com.termux"
 - 无直接系统分区修改 | No direct system partition modifications
 - WebUI 保存只会更新 `config.toml`，需要重启后由模块在 `post-mount` 阶段应用挂载 | Saving in WebUI only updates `config.toml`; the module applies mounts during the next boot's `post-mount` stage
 - WebUI 和 `okrmng inspect --json` 的“已安装用户应用”语义固定为主用户（system user / user 0），避免多用户/工作资料夹环境下的范围歧义 | The "installed user apps" view in WebUI and `okrmng inspect --json` is intentionally scoped to the primary Android user (system user / user 0) to avoid ambiguity on multi-user and work-profile devices
+- WebUI 构建产物会包含 `webroot/config.json`，为兼容的 WebUIX 宿主启用 `/.package/...` 图标与信息资源获取 | The WebUI build ships `webroot/config.json` to enable `/.package/...` icon and info resource fetching on compatible WebUIX hosts
 - 兼容性以“尽量适配”为目标，具体表现仍取决于 Android 版本、ROM 策略和权限模型 | Compatibility is best-effort and still depends on the Android version, ROM policy, and permission model
 - **WebUIX兼容**，可增强模块管理体验 | **WebUIX compatible** for enhanced module management experience
 - WebUI 使用 `okrmng inspect --json` 读取状态，使用 `okrmng replace` 原子写回配置 | The WebUI reads state through `okrmng inspect --json` and writes config atomically with `okrmng replace`

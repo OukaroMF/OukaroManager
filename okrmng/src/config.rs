@@ -69,6 +69,9 @@ fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
         .with_context(|| format!("Failed to write temp config for {}", path.display()))?;
     temp.flush()
         .with_context(|| format!("Failed to flush temp config for {}", path.display()))?;
+    temp.as_file()
+        .sync_all()
+        .with_context(|| format!("Failed to sync temp config for {}", path.display()))?;
 
     if path.exists() {
         #[cfg(windows)]
@@ -81,6 +84,22 @@ fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
     temp.persist(path)
         .map_err(|err| err.error)
         .with_context(|| format!("Failed to persist config {}", path.display()))?;
+    sync_directory(&parent)
+        .with_context(|| format!("Failed to sync config directory {}", parent.display()))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> Result<()> {
+    let directory = fs::File::open(path)
+        .with_context(|| format!("Failed to open config directory {}", path.display()))?;
+    directory
+        .sync_all()
+        .with_context(|| format!("Failed to sync config directory {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<()> {
     Ok(())
 }
 
