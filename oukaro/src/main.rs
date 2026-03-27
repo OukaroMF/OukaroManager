@@ -2,18 +2,17 @@ mod config;
 mod defs;
 mod utils;
 
-use std::{io::Write, path::Path};
+use std::io::Write;
 
 use anyhow::Result;
 use env_logger::Builder;
-use inotify::{Inotify, WatchMask};
 
 use crate::{
-    defs::{LOWER_PATH, SYSTEM_PATH, UPPER_PATH, WORK_PATH},
-    utils::{dir_copys, find_data_path, mount_overlyfs},
+    defs::{LOWER_PATH, UPPER_PATH, WORK_PATH},
+    utils::{cleanup_unmanaged_packages, find_data_path, mount_overlyfs, sync_package_dir},
 };
 
-fn run() -> Result<()> {
+fn init_logger() {
     let mut builder = Builder::new();
     builder.format(|buf, record| {
         let local_time = chrono::Local::now();
@@ -29,15 +28,16 @@ fn run() -> Result<()> {
         )
     });
     builder.filter_level(log::LevelFilter::Info).init();
+}
 
+fn apply_saved_config() -> Result<()> {
     let mut config = config::Config::new();
-    let mut inotify = Inotify::init()?;
-    let system_path = Path::new("/system");
-    let lower = Path::new(LOWER_PATH);
-    let upper = Path::new(UPPER_PATH);
-    let work = Path::new(WORK_PATH);
+    let lower = std::path::Path::new(LOWER_PATH);
+    let upper = std::path::Path::new(UPPER_PATH);
+    let work = std::path::Path::new(WORK_PATH);
+    let system_root = upper.join("app");
+    let priv_root = upper.join("priv-app");
 
-    inotify.watches().add(SYSTEM_PATH, WatchMask::MODIFY)?;
     mount_overlyfs(
         lower.join("priv-app"),
         upper.join("priv-app"),
@@ -48,31 +48,44 @@ fn run() -> Result<()> {
         lower.join("app"),
         upper.join("app"),
         work.join("app"),
-        "/system/",
+        "/system/app",
     )?;
 
-    loop {
-        config.load_config()?;
+    config.load_config()?;
+    let apps = config.get();
 
-        let apps = config.get();
+    cleanup_unmanaged_packages(&priv_root, &apps.priv_app)?;
+    cleanup_unmanaged_packages(&system_root, &apps.system_app)?;
 
-        log::info!("handling system/priv-app");
-        for app in apps.priv_app {
-            let data_path = find_data_path(&app)?;
-
-            dir_copys(data_path, system_path.join("priv-app"));
-            log::info!("mount successful.")
+    log::info!("handling system/priv-app");
+    for app in apps.priv_app {
+        match find_data_path(&app)? {
+            Some(data_path) => {
+                sync_package_dir(data_path, &priv_root, &app)?;
+                log::info!("synced priv-app package {app}");
+            }
+            None => log::warn!("package {app} is not installed; keeping config entry only"),
         }
-
-        log::info!("handling system/app");
-        for app in apps.system_app {
-            let data_path = find_data_path(&app)?;
-
-            dir_copys(data_path, system_path.join("app"));
-            log::info!("mount successful.")
-        }
-        inotify.read_events_blocking(&mut [0; 1024])?;
     }
+
+    log::info!("handling system/app");
+    for app in apps.system_app {
+        match find_data_path(&app)? {
+            Some(data_path) => {
+                sync_package_dir(data_path, &system_root, &app)?;
+                log::info!("synced system-app package {app}");
+            }
+            None => log::warn!("package {app} is not installed; keeping config entry only"),
+        }
+    }
+
+    Ok(())
+}
+
+fn run() -> Result<()> {
+    init_logger();
+    log::info!("applying saved config during boot");
+    apply_saved_config()
 }
 
 fn main() {

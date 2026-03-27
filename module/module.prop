@@ -3,4 +3,4 @@ name=OukaroManager
 version=v1.0.0
 versionCode=1
 author=GitHub.com/OukaroMF/OukaroManager
-description=A KernelSU module with WebUI to convert regular apps into system apps. Supports both /system/app/ and /system/priv-app/ modes.
+description=KernelSU WebUI module for staging primary-user apps into /system/app or /system/priv-app. Save config, then reboot to apply.
