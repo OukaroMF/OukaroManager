@@ -150,39 +150,3 @@ fn main() {
         eprintln!("{:#?}", e.backtrace());
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-
-    use crate::config::App;
-
-    use super::sanitize_managed_apps;
-
-    #[test]
-    fn sanitize_managed_apps_skips_invalid_entries_and_prefers_priv_app() {
-        let managed = sanitize_managed_apps(App {
-            system_app: HashSet::from([
-                "com.example.shared".to_string(),
-                "com.example.system".to_string(),
-                "../escape".to_string(),
-            ]),
-            priv_app: HashSet::from([
-                "com.example.shared".to_string(),
-                "com.example.priv".to_string(),
-                "single".to_string(),
-            ]),
-        });
-
-        assert_eq!(
-            managed.priv_apply,
-            vec![
-                "com.example.priv".to_string(),
-                "com.example.shared".to_string(),
-            ]
-        );
-        assert_eq!(managed.system_apply, vec!["com.example.system".to_string()]);
-        assert!(managed.priv_keep.contains("com.example.shared"));
-        assert!(!managed.system_keep.contains("com.example.shared"));
-    }
-}

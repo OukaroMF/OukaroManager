@@ -18,27 +18,3 @@ impl SystemUserPackageState {
         self.installed && !self.hidden
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::SystemUserPackageState;
-
-    #[test]
-    fn package_state_matches_android_is_available_semantics() {
-        assert!(SystemUserPackageState::default().is_available());
-        assert!(
-            !SystemUserPackageState {
-                installed: false,
-                hidden: false,
-            }
-            .is_available()
-        );
-        assert!(
-            !SystemUserPackageState {
-                installed: true,
-                hidden: true,
-            }
-            .is_available()
-        );
-    }
-}

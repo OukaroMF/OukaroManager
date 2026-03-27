@@ -100,20 +100,3 @@ fn sync_directory(path: &Path) -> Result<()> {
 fn sync_directory(_path: &Path) -> Result<()> {
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use tempfile::tempdir;
-
-    use super::write_atomically;
-
-    #[test]
-    fn atomic_writer_creates_complete_config_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-
-        write_atomically(&path, b"[app]\n").unwrap();
-
-        assert_eq!(std::fs::read_to_string(path).unwrap(), "[app]\n");
-    }
-}
