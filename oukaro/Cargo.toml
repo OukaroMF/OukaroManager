@@ -1,0 +1,25 @@
+[package]
+name = "oukaro"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+cesu8 = "1.1.0"
+chrono = "0.4.42"
+env_logger = "0.11.8"
+log = "0.4.28"
+quick-xml = "0.38.3"
+serde = { version = "1.0.228", features = ["serde_derive"] }
+tempfile = "3.23.0"
+toml = "0.9.8"
+
+[target.'cfg(any(target_os = "android", target_os = "linux"))'.dependencies]
+rustix = { version = "1.1.2", features = ["mount"] }
+
+[profile.release]
+overflow-checks = false
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+strip = true

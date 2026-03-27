@@ -5,23 +5,26 @@
 [![KernelSU](https://img.shields.io/badge/KernelSU-Compatible-green.svg)](https://github.com/tiann/KernelSU)
 [![WebUIX](https://img.shields.io/badge/WebUIX-Compatible-orange.svg)](https://github.com/MMRLApp/WebUI-X-Portable)
 
-一个KernelSU模块，提供简单的WebUI来将普通Android应用转换为系统应用 — 无需ADB，无需root shell，只需点击。
+![OukaroManager logo](webui/src/assets/karo.svg)
 
-A KernelSU module that provides a simple WebUI to convert regular Android apps to system apps — no ADB, no root shell, just click.
+一个 KernelSU 模块，提供基于 Vue 3 的 WebUI，将主用户（system user / user 0）的普通 Android 应用加入系统应用配置中。WebUI 可搜索主用户应用、切换 `System`/`Priv` 模式、保存配置，并在保存后明确提示重启生效。
+
+A KernelSU module with a Vue 3 WebUI for turning regular Android apps installed for the primary Android user (system user / user 0) into system-app config entries. The WebUI lets you search primary-user apps, switch between `System` and `Priv` modes, save config, and then reboot to apply.
 
 ## ✨ 功能特性 | Features
 
 - 🧱 **将普通应用转换为系统应用** | **Convert regular apps to system apps**
 - 📁 **支持 `System` 和 `Priv` 两种模式** | **Supports both `System` and `Priv` modes**
-- 🌐 **WebUI 兼容界面** — 通过KernelSU Manager、MMRL或WebUIX portable控制 | **WebUI compatible interface** — Control via KernelSU Manager, MMRL or WebUIX portable
-- 🛠️ **与KernelSU的挂载系统协同工作**，无需手动重新挂载/system | **Works with KernelSU's bind system**, no manual /system remounting required
-- 🌍 **多语言支持** — 支持简体中文和英文 | **Multi-language support** — Supports Simplified Chinese and English
+- 🌐 **Vue 3 + shadcn 风格 WebUI** — 在 KernelSU Manager、MMRL 或 WebUIX portable 中使用 | **Vue 3 + shadcn-style WebUI** — Use it in KernelSU Manager, MMRL or WebUIX portable
+- 🛠️ **通过模块内 overlayfs 挂载工作**，无需手动重新挂载/system | **Works through module-managed overlayfs mounts**, no manual /system remounting required
+- 🔎 **应用搜索与模式切换** — 按包名筛选并逐个选择 `None` / `System` / `Priv` | **Search and mode switching** — Filter by package name and choose `None` / `System` / `Priv`
+- 🌍 **多语言支持** — 支持简体中文和英文，并默认跟随浏览器/管理器语言 | **Multi-language support** — Simplified Chinese and English with locale-aware default selection
 
 ## 📦 工作原理 | How It Works
 
-该模块使用KernelSU的挂载系统将选定的用户应用注入到系统分区中，模拟它们作为预装应用的行为。
+该模块会在下一次启动的 KernelSU `post-mount` 阶段，通过模块内的 overlayfs 上层目录，将选定主用户应用同步到 `/system/app` 或 `/system/priv-app`，尽量让它们以“预装应用”的方式被系统扫描。
 
-This module uses KernelSU's mount system to inject selected user applications into the system partition, simulating their behavior as pre-installed apps.
+This module syncs selected primary-user apps into `/system/app` or `/system/priv-app` during the next boot's KernelSU `post-mount` stage by using module-managed overlayfs upper directories, so Android can scan them like pre-installed apps.
 
 ## 🚀 安装 | Installation
 
@@ -32,12 +35,12 @@ This module uses KernelSU's mount system to inject selected user applications in
 
 ## 🖥️ 使用方法 | Usage
 
-### Webui
+### WebUI
 1. 打开KernelSU Manager（如果KernelSU Manager不可用，可使用MMRL/WebUIX portable） | Open KernelSU Manager (if KernelSU Manager is unavailable, use MMRL/WebUIX portable)
 2. 导航到OukaroManager模块WebUI | Navigate to OukaroManager module WebUI
-3. 选择要转换的应用 | Select the apps you want to convert
-4. 在 `System` 或 `Priv` 路径之间选择 | Choose between `System` or `Priv` path
-5. 点击转换并在提示时重启 | Click convert and reboot when prompted
+3. 搜索要处理的主用户应用 | Search for the primary-user apps you want to manage
+4. 为每个应用选择 `None`、`System` 或 `Priv` | Choose `None`, `System`, or `Priv` for each app
+5. 点击保存配置，并在提示后重启设备 | Save the configuration, then reboot when prompted
 
 ### 手动修改 | Manual 
 > 配置文件路径在 /data/adb/modules/oukaro_manager/config.toml
@@ -46,10 +49,18 @@ e.g
 ```toml
 [app]
 system_app = ["bin.mt.plus"]
-priv_app = ["com termux"]
+priv_app = ["com.termux"]
 ```
 
 > 注意 `system_app` 和 `priv_app` 仅能使用应用包名
+
+### CLI
+> 模块内会同时打包 `okrmng`，用于 WebUI 和命令行配置管理
+
+```sh
+okrmng inspect --json
+okrmng replace --system "bin.mt.plus" --priv "com.termux"
+```
 
 ## ⚠️ 系统要求 | System Requirements
 
@@ -59,11 +70,14 @@ priv_app = ["com termux"]
 
 ## 🔧 技术细节 | Technical Details
 
-- 使用KernelSU的挂载系统 | Uses KernelSU's bind system
+- 使用模块内 overlayfs 挂载 | Uses module-managed overlayfs mounts
 - 无直接系统分区修改 | No direct system partition modifications
-- 通过模块移除可逆转更改 | Reversible changes through module removal
-- 兼容大多数Android版本 | Compatible with most Android versions
+- WebUI 保存只会更新 `config.toml`，需要重启后由模块在 `post-mount` 阶段应用挂载 | Saving in WebUI only updates `config.toml`; the module applies mounts during the next boot's `post-mount` stage
+- WebUI 和 `okrmng inspect --json` 的“已安装用户应用”语义固定为主用户（system user / user 0），避免多用户/工作资料夹环境下的范围歧义 | The "installed user apps" view in WebUI and `okrmng inspect --json` is intentionally scoped to the primary Android user (system user / user 0) to avoid ambiguity on multi-user and work-profile devices
+- WebUI 构建产物会包含 `webroot/config.json`，为兼容的 WebUIX 宿主启用 `/.package/...` 图标与信息资源获取 | The WebUI build ships `webroot/config.json` to enable `/.package/...` icon and info resource fetching on compatible WebUIX hosts
+- 兼容性以“尽量适配”为目标，具体表现仍取决于 Android 版本、ROM 策略和权限模型 | Compatibility is best-effort and still depends on the Android version, ROM policy, and permission model
 - **WebUIX兼容**，可增强模块管理体验 | **WebUIX compatible** for enhanced module management experience
+- WebUI 使用 `okrmng inspect --json` 读取状态，使用 `okrmng replace` 原子写回配置 | The WebUI reads state through `okrmng inspect --json` and writes config atomically with `okrmng replace`
 
 ## 📱 WebUI访问选项 | WebUI Access Options
 
@@ -86,19 +100,20 @@ This module supports the **WebUIX** standard and can be accessed through multipl
 ## 🔄 转换模式 | Conversion Modes
 
 ### System: `/system/app/`
-标准系统应用位置，具有基本系统权限。适合大多数普通应用。
-Standard system app location with basic system privileges. Suitable for most regular apps.
+标准系统应用位置。适合希望在下次开机时以“预装应用”方式参与系统扫描的大多数普通应用。
+Standard system app location. Suitable for most regular apps that need to be scanned like pre-installed apps on the next boot.
 
 ### Priv: `/system/priv-app/`
-特权系统应用位置，具有增强的系统权限。适合需要特殊权限的应用。
-Privileged system app location with enhanced system privileges. Suitable for apps requiring special permissions.
+特权系统应用位置，但这不等于现代 Android 一定授予特权权限。自 Android 8.0/9 起，很多 ROM 还要求同分区的 `privapp-permissions.xml` allowlist；本模块不会自动生成这些 XML。
+Privileged system app location, but this does not guarantee privileged permissions on modern Android. Since Android 8.0/9, many ROMs still require same-partition `privapp-permissions.xml` allowlists, and this module does not generate those XML files automatically.
 
 ## 🛡️ 安全说明 | Security Notes
 
 - 转换应用为系统应用会赋予它们额外的权限 | Converting apps to system apps grants them additional permissions
 - 请仅转换您信任的应用 | Only convert apps you trust
 - 备份重要数据，以防意外情况 | Backup important data in case of unexpected issues
-- 可以随时通过WebUI或移除模块来还原更改 | Changes can be reverted anytime through WebUI or module removal
+- `Priv` 模式在严格执行 privileged-permission allowlist 的 ROM 上可能无法达到预期，极端情况下还可能引发启动期兼容性问题 | `Priv` mode may not behave as expected on ROMs that strictly enforce privileged-permission allowlists, and in extreme cases can cause boot-time compatibility issues
+- 可以随时通过 WebUI 将应用改回 `None`、保存配置并重启来还原更改 | You can revert changes anytime by switching an app back to `None` in WebUI, saving, and rebooting
 
 ## 🐛 故障排除 | Troubleshooting
 
@@ -110,12 +125,17 @@ Privileged system app location with enhanced system privileges. Suitable for app
 ### 应用转换失败 | App Conversion Fails
 1. 确保有足够的存储空间 | Ensure sufficient storage space
 2. 检查应用是否已经是系统应用 | Check if the app is already a system app
-3. 尝试重启设备后再次转换 | Try rebooting the device and converting again
+3. 确认已经点击“保存配置”，然后重启设备再检查结果 | Make sure you saved the config, then reboot the device and check again
 
 ### 转换后应用无法正常工作 | Apps Not Working After Conversion
-1. 尝试将应用还原为用户应用 | Try reverting the app back to user app
+1. 在 WebUI 中将应用切回 `None`，保存后重启 | Switch the app back to `None` in WebUI, save, and reboot
 2. 清除应用数据和缓存 | Clear app data and cache
 3. 检查应用是否与您的Android版本兼容 | Check if the app is compatible with your Android version
+
+### WebUI显示失效配置 | WebUI Shows Stale Configuration
+1. 这表示某些已配置包名不再属于当前主用户应用列表 | This means some configured package names are no longer present for the primary Android user
+2. WebUI 保存时会保留这些条目，不会自动丢失 | The WebUI preserves those entries when saving
+3. 如需移除，请通过 WebUI 重新选择有效包，或手动编辑 `config.toml` | Remove them by selecting valid packages in WebUI or editing `config.toml` manually
 
 ## 🤝 贡献 | Contributing
 

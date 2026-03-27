@@ -1,2 +1,12 @@
-target/
-**.bak
+/module/oukaro
+/module/okrmng
+/module/webroot/
+/okrmng/target/
+/oukaro/target/
+/webui/node_modules/
+/webui/dist/
+/webui/.vite/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
