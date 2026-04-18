@@ -5,6 +5,8 @@
 [![KernelSU](https://img.shields.io/badge/KernelSU-Compatible-green.svg)](https://github.com/tiann/KernelSU)
 [![WebUIX](https://img.shields.io/badge/WebUIX-Compatible-orange.svg)](https://github.com/MMRLApp/WebUI-X-Portable)
 
+- 🇬🇧 English: [README_EN.md](README_EN.md)
+
 ![OukaroManager logo](webui/src/assets/karo.svg)
 
 一个 KernelSU 模块，提供基于 Vue 3 的 WebUI，将主用户（system user / user 0）的普通 Android 应用加入系统应用配置中。WebUI 可搜索主用户应用、切换 `System`/`Priv` 模式、保存配置，并在保存后明确提示重启生效。
